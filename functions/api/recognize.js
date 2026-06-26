@@ -1,6 +1,7 @@
 // Cloudflare Pages Function — POST /api/recognize
-// 雙引擎：預設 Gemini；若設定 AI_BASE_URL + AI_API_KEY 則改走 OpenAI 相容端點
-// （可接 Qwen-VL：OpenRouter / DashScope / 自架 vLLM·Ollama 經 Cloudflare Tunnel）。
+// 雙引擎：主引擎 Gemini；一旦 Gemini 無法使用，且有設定 AI_BASE_URL + AI_API_KEY，
+// 立刻自動切換到 OpenAI 相容端點（本地 Ollama·Qwen-VL 經 Cloudflare Tunnel），不重試。
+// 回應會帶 engine 欄位（'gemini' 或 'local'）讓前端顯示目前用哪個引擎。
 // 密碼以 APP_PASSWORD 保護；所有金鑰只在伺服器端。
 
 const SYS = '你是專業的發票與出貨明細資料擷取助手。你只會輸出一個合法的 JSON 物件，不含任何說明文字、前言或 markdown 標記。';
@@ -104,20 +105,30 @@ export async function onRequestPost(context) {
   if (body.ping) return json({ ok: true });
   if (!body.image) return json({ error: '缺少影像資料' }, 400);
 
-  const useQwen = env.AI_BASE_URL && env.AI_API_KEY;
-  let text;
+  // 主引擎走 Gemini；一旦 Gemini 無法使用（任何錯誤）且有設定本地端，立刻改走本地 Ollama，不重試。
+  const hasLocal = env.AI_BASE_URL && env.AI_API_KEY;
+  let text, engine = 'gemini';
   try {
-    text = useQwen ? await callOpenAICompat(env, body) : await callGemini(env, body);
+    text = await callGemini(env, body);
   } catch (err) {
-    if (err.status === 429) return json({ error: '已達額度上限', rateLimited: true, retryAfter: err.retryAfter || 30 }, 429);
-    return json({ error: '辨識服務回應 ' + (err.status || '') + '：' + (err.message || '') }, err.status === 500 ? 500 : 502);
+    if (hasLocal) {
+      engine = 'local';
+      try {
+        text = await callOpenAICompat(env, body);
+      } catch (err2) {
+        return json({ error: '本地端辨識失敗：' + (err2.message || ''), engine: 'local' }, 502);
+      }
+    } else {
+      if (err.status === 429) return json({ error: '已達額度上限', rateLimited: true, retryAfter: err.retryAfter || 30 }, 429);
+      return json({ error: '辨識服務回應 ' + (err.status || '') + '：' + (err.message || '') }, err.status === 500 ? 500 : 502);
+    }
   }
 
   let clean = String(text).replace(/```json/gi, '').replace(/```/g, '').trim();
   const s = clean.indexOf('{'), e = clean.lastIndexOf('}');
-  if (s < 0 || e < 0) return json({ error: '回傳格式無法解析', raw: String(text).slice(0, 500) });
-  try { return json({ data: JSON.parse(clean.slice(s, e + 1)) }); }
-  catch (_) { return json({ error: 'JSON 解析失敗', raw: String(text).slice(0, 500) }); }
+  if (s < 0 || e < 0) return json({ error: '回傳格式無法解析', raw: String(text).slice(0, 500), engine });
+  try { return json({ data: JSON.parse(clean.slice(s, e + 1)), engine }); }
+  catch (_) { return json({ error: 'JSON 解析失敗', raw: String(text).slice(0, 500), engine }); }
 }
 
 export async function onRequest(context) {

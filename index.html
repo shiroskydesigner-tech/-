@@ -131,6 +131,7 @@
   .spinner{width:20px; height:20px; border:2.5px solid var(--line); border-top-color:var(--brass); border-radius:50%; animation:spin .8s linear infinite; flex:none}
   @keyframes spin{to{transform:rotate(360deg)}}
   .pending.error{border-color:var(--err); color:var(--err)}
+  .engine-tag{flex:none; align-self:flex-start; font-size:11px; letter-spacing:.06em; color:#fff; background:var(--ok); border-radius:2px; padding:4px 8px; white-space:nowrap}
   .pending .raw{font-size:11px; color:var(--muted); max-height:60px; overflow:auto; font-family:monospace; margin-top:4px}
   /* ---- 結算 ---- */
   .settle{margin-top:40px}
@@ -330,7 +331,7 @@ async function callVision(base64, mediaType){
   if(res.status===429 || payload.rateLimited){ const e=new Error(payload.error||'已達額度上限'); e.rateLimited=true; e.retryAfter=payload.retryAfter||30; throw e; }
   if(payload.error){ const e=new Error(payload.error); e.raw=payload.raw; throw e; }
   if(!payload.data){ const e=new Error('辨識無資料'); e.raw=payload.raw; throw e; }
-  return payload.data;
+  return { data:payload.data, engine:payload.engine||'gemini' };
 }
 
 /* ============ 新增發票 ============ */
@@ -382,6 +383,7 @@ function renderCard(inv,i){
         <div class="fld"><label>日期</label><input data-field="date" value="${esc(inv.date)}" placeholder="YYYY-MM-DD"></div>
         <div class="fld"><label>單號 / 發票號碼</label><input data-field="invoiceNo" value="${esc(inv.invoiceNo)}" placeholder="選填"></div>
       </div>
+      ${inv.engine==='local'?`<span class="engine-tag" title="Gemini 無法使用，此張改由本地端 Qwen 讀取">⚙ 本地端讀取</span>`:''}
     </div>
     <div class="tbl-wrap">
       <table class="items">
@@ -496,17 +498,19 @@ async function handleFiles(files){
     try{
       const {dataUrl,base64,mediaType}=await compressImage(f);
       if(dataUrl) pend.querySelector('img')?.setAttribute('src',dataUrl);
-      let data=null, attempt=0;
+      let result=null, attempt=0;
       while(true){
-        try{ data=await callVision(base64,mediaType); break; }
+        try{ result=await callVision(base64,mediaType); break; }
         catch(err){
           if(err.rateLimited && attempt<6){ attempt++; await waitWithCountdown(pend, Math.min(err.retryAfter||30,60)); continue; }
           throw err;
         }
       }
-      const inv=makeInvoice(data,dataUrl);
+      const inv=makeInvoice(result.data,dataUrl);
+      inv.engine=result.engine;
       state.invoices.push(inv); pend.remove(); render();
-      toast('已辨識：'+(inv.vendor||f.name));
+      if(result.engine==='local'){ toast('⚙ Gemini 無法使用，已切換為本地端讀取：'+(inv.vendor||f.name)); }
+      else{ toast('已辨識：'+(inv.vendor||f.name)); }
       await sleep(700); // 緩衝，降低連續請求觸頂機率
     }catch(err){
       showPendingError(pend, f.name, err);
@@ -554,7 +558,7 @@ async function loadJsonFile(file){
     if(state.invoices.length && !confirm('載入工作檔會取代目前畫面上的資料，要繼續嗎？')) return;
     state.invoices = arr.map(v=>{ state.counter++; return {
       id:state.counter, vendor:v.vendor||'', date:v.date||'', invoiceNo:v.invoiceNo||'',
-      thumb:v.thumb||'', total:v.total??0, manualTotal:v.manualTotal??true,
+      thumb:v.thumb||'', total:v.total??0, manualTotal:v.manualTotal??true, engine:v.engine||'gemini',
       items:(v.items&&v.items.length?v.items:[blankItem()]).map(it=>({name:it.name||'',qty:it.qty??'',unitPrice:it.unitPrice??'',subtotal:it.subtotal??'',manualSub:it.manualSub??false}))
     };});
     if(obj.label) $('#sessionLabel').value=obj.label;
