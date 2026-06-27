@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root{
     --ink:#2E2A26; --ink2:#3D3935; --brass:#B8973E; --brass-d:#9A7C2E;
@@ -169,6 +170,18 @@
   .unit-add{display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--line)}
   .unit-add input{flex:1; font-family:inherit; font-size:13.5px; padding:8px 10px; border:1px solid var(--line); border-radius:2px; outline:none; background:var(--paper)}
   .unit-add input:focus{border-color:var(--brass)}
+  /* ---- 彈性分析彈窗 ---- */
+  #analyzeModal{position:fixed; inset:0; background:rgba(46,42,38,.85); display:none; place-items:center; z-index:70; padding:24px}
+  .ana-card{background:var(--card); border-top:3px solid var(--brass); border-radius:4px; width:min(1080px,96vw); max-height:92vh; overflow:auto; padding:20px 22px; box-shadow:0 24px 60px rgba(0,0,0,.5)}
+  .ana-head{display:flex; justify-content:space-between; align-items:center; font-family:'Noto Serif TC',serif; font-weight:700; font-size:20px; color:var(--ink2); border-bottom:2px solid var(--ink2); padding-bottom:10px}
+  #anaClose{border:none; background:transparent; font-size:22px; color:var(--muted); cursor:pointer; line-height:1}
+  #anaClose:hover{color:var(--err)}
+  .ana-controls{display:flex; flex-wrap:wrap; gap:12px 16px; align-items:center; margin:14px 0; font-size:13px; color:var(--muted)}
+  .ana-controls select{font-family:inherit; font-size:13px; padding:6px 8px; border:1px solid var(--line); border-radius:2px; background:var(--paper); color:var(--ink2); margin-left:4px}
+  .ana-chk{display:flex; align-items:center; gap:5px; color:var(--ink2)}
+  .ana-body{display:grid; grid-template-columns:1.2fr 1fr; gap:20px; align-items:start}
+  @media(max-width:820px){.ana-body{grid-template-columns:1fr}}
+  .ana-chart-wrap{position:relative; height:360px}
   .pending .raw{font-size:11px; color:var(--muted); max-height:60px; overflow:auto; font-family:monospace; margin-top:4px}
   /* ---- 結算 ---- */
   .settle{margin-top:40px}
@@ -270,6 +283,7 @@
       </div>
     </div>
     <div class="toolbar">
+      <button class="btn btn-solid" id="btnAnalyze">📊 彈性分析</button>
       <button class="btn btn-brass" id="btnExportAll">匯出全部 (.xlsx)</button>
       <button class="btn btn-solid" id="btnSave">儲存工作檔 (.json)</button>
       <button class="btn btn-ghost" id="btnClear" style="margin-left:auto">清空全部</button>
@@ -285,6 +299,23 @@
   <div class="unit-add">
     <input id="unitNew" placeholder="新增單位名稱…" maxlength="40">
     <button class="btn btn-brass btn-sm" id="unitAdd">新增</button>
+  </div>
+</div>
+
+<div id="analyzeModal">
+  <div class="ana-card">
+    <div class="ana-head"><span>彈性分析</span><button id="anaClose" title="關閉">×</button></div>
+    <div class="ana-controls">
+      <label>維度 <select id="anaDim"><option value="unit">使用單位</option><option value="vendor">廠商</option></select></label>
+      <label>廠商 <select id="anaVendor"></select></label>
+      <label>單位 <select id="anaUnit"></select></label>
+      <label class="ana-chk"><input type="checkbox" id="anaByItem"> 細分到品項</label>
+      <label>圖表 <select id="anaChart"><option value="pie">圓餅</option><option value="bar">長條</option></select></label>
+    </div>
+    <div class="ana-body">
+      <div id="anaTable"></div>
+      <div class="ana-chart-wrap"><canvas id="anaCanvas"></canvas></div>
+    </div>
   </div>
 </div>
 
@@ -787,6 +818,72 @@ function bindUnitPanel(){
   $('#unitNew').addEventListener('keydown',e=>{ if(e.key==='Enter') addUnit(); });
 }
 bindUnitPanel();
+
+/* ============ 彈性分析（依單位/廠商 + 篩選 + 品項細分 + 圖表） ============ */
+let _anaChart=null;
+function uniqueVendors(){ const s=new Set(); state.invoices.forEach(inv=>s.add(inv.vendor||'未填')); return [...s]; }
+function uniqueUnits(){ const s=new Set(); state.invoices.forEach(inv=>inv.items.forEach(it=>{ if(it.name||it.subtotal) s.add(effUnit(inv,it)); })); return [...s]; }
+function analysisRows(){
+  const dim=$('#anaDim').value, fv=$('#anaVendor').value, fu=$('#anaUnit').value, byItem=$('#anaByItem').checked;
+  const map={}; let total=0;
+  state.invoices.forEach(inv=>{ const vendor=inv.vendor||'未填';
+    inv.items.forEach(it=>{ if(!(it.name||it.subtotal)) return;
+      const unit=effUnit(inv,it);
+      if(fv && vendor!==fv) return;
+      if(fu && unit!==fu) return;
+      const sub=parseNum(it.subtotal), g=(dim==='unit'?unit:vendor);
+      const key=byItem? g+' '+(it.name||'(未命名)') : g;
+      if(!map[key]) map[key]={ g, item: byItem?(it.name||'(未命名)'):'', amt:0, items:0, invs:new Set() };
+      map[key].amt+=sub; map[key].items++; map[key].invs.add(inv.id); total+=sub;
+    }); });
+  const rows=Object.values(map).map(r=>({ g:r.g, item:r.item, amt:r.amt, items:r.items, invs:r.invs.size }))
+    .sort((a,b)=> a.g===b.g ? b.amt-a.amt : (a.g<b.g?-1:1));
+  return { rows, total, dim, byItem };
+}
+function renderAnalysisTable({rows,total,dim,byItem}){
+  const dl=dim==='unit'?'使用單位':'廠商';
+  const head=byItem
+    ? `<tr><th>${dl}</th><th>品項</th><th class="r">張數</th><th class="r">項目</th><th class="r">金額</th><th class="r">佔比</th></tr>`
+    : `<tr><th>${dl}</th><th class="r">張數</th><th class="r">項目</th><th class="r">金額</th><th class="r">佔比</th></tr>`;
+  const body=rows.map(r=>{ const p=total?Math.round(r.amt/total*100):0;
+    return byItem
+      ? `<tr><td>${esc(r.g)}</td><td>${esc(r.item)}</td><td class="r num">${r.invs}</td><td class="r num">${r.items}</td><td class="r num">${fmt(r.amt)}</td><td class="r num">${p}%</td></tr>`
+      : `<tr><td>${esc(r.g)}</td><td class="r num">${r.invs}</td><td class="r num">${r.items}</td><td class="r num">${fmt(r.amt)}</td><td class="r num">${p}%</td></tr>`;
+  }).join('');
+  const cols=byItem?6:5, span=byItem?4:3;
+  $('#anaTable').innerHTML=`<table class="summary"><thead>${head}</thead>
+    <tbody>${body||`<tr><td colspan="${cols}" style="color:var(--muted)">無資料</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="${span}">總計</td><td class="r num">${fmt(total)}</td><td></td></tr></tfoot></table>`;
+}
+function renderAnalysisChart({rows,dim}){
+  const agg={}; rows.forEach(r=>{ agg[r.g]=(agg[r.g]||0)+r.amt; });
+  let entries=Object.entries(agg).sort((a,b)=>b[1]-a[1]);
+  if(entries.length>12){ const top=entries.slice(0,12); const rest=entries.slice(12).reduce((s,e)=>s+e[1],0); if(rest>0) top.push(['其他',rest]); entries=top; }
+  const labels=entries.map(e=>e[0]), data=entries.map(e=>e[1]);
+  const colors=labels.map((_,i)=>VENDOR_COLORS[i%VENDOR_COLORS.length]);
+  const type=$('#anaChart').value;
+  if(_anaChart){ _anaChart.destroy(); _anaChart=null; }
+  if(typeof Chart==='undefined') return; // CDN 未載入時略過
+  _anaChart=new Chart($('#anaCanvas').getContext('2d'),{
+    type: type==='pie'?'doughnut':'bar',
+    data:{ labels, datasets:[{ data, backgroundColor:colors, borderWidth:1 }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ display:type==='pie', position:'right' },
+        title:{ display:true, text:(dim==='unit'?'依使用單位':'依廠商')+' 金額' } },
+      scales: type==='bar'?{ y:{ beginAtZero:true } }:{} }
+  });
+}
+function refreshAnalysis(){ const d=analysisRows(); renderAnalysisTable(d); renderAnalysisChart(d); }
+function openAnalyze(){
+  if(!state.invoices.length){ toast('尚無資料可分析'); return; }
+  $('#anaVendor').innerHTML='<option value="">全部廠商</option>'+uniqueVendors().map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  $('#anaUnit').innerHTML='<option value="">全部單位</option>'+uniqueUnits().map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');
+  $('#analyzeModal').style.display='grid'; refreshAnalysis();
+}
+$('#btnAnalyze').onclick=openAnalyze;
+$('#anaClose').onclick=()=>$('#analyzeModal').style.display='none';
+$('#analyzeModal').addEventListener('click',e=>{ if(e.target.id==='analyzeModal') e.currentTarget.style.display='none'; });
+['#anaDim','#anaVendor','#anaUnit','#anaByItem','#anaChart'].forEach(s=>$(s).addEventListener('change',refreshAnalysis));
 
 /* ============ 密碼登入 ============ */
 const GATE = { el:$('#gate'), show(){ this.el.style.display='grid'; setTimeout(()=>$('#gatePw').focus(),50); }, hide(){ this.el.style.display='none'; } };
