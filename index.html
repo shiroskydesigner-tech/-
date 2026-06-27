@@ -132,6 +132,43 @@
   @keyframes spin{to{transform:rotate(360deg)}}
   .pending.error{border-color:var(--err); color:var(--err)}
   .engine-tag{flex:none; align-self:flex-start; font-size:11px; letter-spacing:.06em; color:#fff; background:var(--ok); border-radius:2px; padding:4px 8px; white-space:nowrap}
+  /* ---- 使用單位下拉 ---- */
+  .fld-unit select,.unit-cell select{
+    font-family:inherit; font-size:14px; color:var(--ink2); background:var(--paper);
+    border:1px solid var(--line); border-radius:2px; padding:4px 4px; outline:none; max-width:100%;
+  }
+  .fld-unit select:focus,.unit-cell select:focus{border-color:var(--brass); background:#fff}
+  .unit-cell{min-width:108px}
+  .unit-cell select{font-size:12.5px; width:100%; padding:5px 4px}
+  /* ---- 右下角單位管理懸浮 ---- */
+  #unitFab{
+    position:fixed; right:20px; bottom:20px; z-index:55; cursor:pointer;
+    font-family:'Noto Serif TC',serif; font-weight:700; font-size:14px; letter-spacing:.06em;
+    color:#fff; background:var(--brass); border:none; border-radius:24px; padding:11px 18px;
+    box-shadow:0 8px 22px -8px rgba(61,57,53,.6);
+  }
+  #unitFab:hover{background:var(--brass-d)}
+  #unitPanel{
+    position:fixed; right:20px; bottom:70px; z-index:56; width:min(320px,92vw);
+    background:var(--card); border:1px solid var(--line); border-top:3px solid var(--brass); border-radius:4px;
+    box-shadow:0 20px 50px -16px rgba(61,57,53,.5); padding:14px; display:none;
+  }
+  #unitPanel.open{display:block}
+  .unit-head{display:flex; align-items:center; justify-content:space-between; font-family:'Noto Serif TC',serif; font-weight:700; font-size:16px; color:var(--ink2)}
+  #unitClose{border:none; background:transparent; font-size:20px; color:var(--muted); cursor:pointer; line-height:1}
+  #unitClose:hover{color:var(--err)}
+  .unit-hint{font-size:11.5px; color:var(--muted); margin:6px 0 10px; line-height:1.5}
+  #unitList{max-height:46vh; overflow:auto}
+  .unit-empty{font-size:13px; color:var(--muted); padding:12px 4px; text-align:center}
+  .unit-row{display:flex; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid var(--line2)}
+  .unit-chk{display:flex; align-items:center; gap:4px; font-size:11px; color:var(--muted); white-space:nowrap; cursor:pointer}
+  .unit-name{flex:1; font-family:inherit; font-size:14px; color:var(--ink2); border:1px solid transparent; border-radius:2px; padding:5px 6px; outline:none; background:var(--paper)}
+  .unit-name:focus{border-color:var(--brass); background:#fff}
+  .unit-del{border:none; background:transparent; color:var(--muted); font-size:17px; cursor:pointer; line-height:1; padding:2px 6px; border-radius:3px}
+  .unit-del:hover{color:var(--err); background:rgba(168,75,58,.08)}
+  .unit-add{display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--line)}
+  .unit-add input{flex:1; font-family:inherit; font-size:13.5px; padding:8px 10px; border:1px solid var(--line); border-radius:2px; outline:none; background:var(--paper)}
+  .unit-add input:focus{border-color:var(--brass)}
   .pending .raw{font-size:11px; color:var(--muted); max-height:60px; overflow:auto; font-family:monospace; margin-top:4px}
   /* ---- 結算 ---- */
   .settle{margin-top:40px}
@@ -240,12 +277,23 @@
   </section>
 </main>
 
+<button id="unitFab" title="使用單位管理">⚙ 單位</button>
+<div id="unitPanel">
+  <div class="unit-head"><span>使用單位管理</span><button id="unitClose" title="關閉">×</button></div>
+  <div class="unit-hint">勾選「顯示」的單位才會出現在每張發票的下拉中；變更會自動儲存。</div>
+  <div id="unitList"></div>
+  <div class="unit-add">
+    <input id="unitNew" placeholder="新增單位名稱…" maxlength="40">
+    <button class="btn btn-brass btn-sm" id="unitAdd">新增</button>
+  </div>
+</div>
+
 <div id="toast"></div>
 <div id="lightbox"><img id="lightboxImg" alt=""></div>
 
 <script>
 /* ============ 狀態 ============ */
-const state = { invoices: [], counter: 0, password: '', model: 'gemini-2.5-flash' };
+const state = { invoices: [], counter: 0, password: '', model: 'gemini-2.5-flash', units: [] };
 const VENDOR_COLORS = ['#B8973E','#5C7A4A','#A84B3A','#6B7B9E','#9A6FA8','#C08A3E','#4F8A8B','#8B6F47'];
 const vendorColorMap = {};
 function vendorColor(v){ if(!v) return 'var(--rose)'; if(!(v in vendorColorMap)){ vendorColorMap[v]=VENDOR_COLORS[Object.keys(vendorColorMap).length%VENDOR_COLORS.length]; } return vendorColorMap[v]; }
@@ -340,13 +388,13 @@ function makeInvoice(data, thumb){
   const items=(data.items||[]).map(it=>({
     name:it.name||'', qty:it.qty===null?'':parseNum(it.qty),
     unitPrice:it.unitPrice===null?'':parseNum(it.unitPrice),
-    subtotal:it.subtotal===null?'':parseNum(it.subtotal), manualSub:false
+    subtotal:it.subtotal===null?'':parseNum(it.subtotal), manualSub:false, unit:''
   }));
   // 若小計缺漏，用數量×單價補
   items.forEach(it=>{ if(it.subtotal===''&&it.qty!==''&&it.unitPrice!=='') it.subtotal=round2(parseNum(it.qty)*parseNum(it.unitPrice)); });
   const computed=items.reduce((s,it)=>s+parseNum(it.subtotal),0);
   const inv={
-    id:state.counter, vendor:data.vendor||'', date:data.date||'',
+    id:state.counter, vendor:data.vendor||'', date:data.date||'', unit:'',
     invoiceNo:data.invoiceNo||'', items, thumb:thumb||'',
     total:(data.total!==undefined&&data.total!==null)?parseNum(data.total):round2(computed),
     manualTotal:(data.total!==undefined&&data.total!==null)
@@ -354,7 +402,7 @@ function makeInvoice(data, thumb){
   if(!inv.items.length) inv.items.push(blankItem());
   return inv;
 }
-function blankItem(){ return {name:'',qty:'',unitPrice:'',subtotal:'',manualSub:false}; }
+function blankItem(){ return {name:'',qty:'',unitPrice:'',subtotal:'',manualSub:false,unit:''}; }
 function round2(n){ return Math.round((Number(n)||0)*100)/100; }
 
 /* ============ 渲染 ============ */
@@ -362,6 +410,18 @@ function render(){
   const list=$('#invoiceList'); list.innerHTML='';
   state.invoices.forEach((inv,i)=> list.appendChild(renderCard(inv,i)));
   renderSummary();
+}
+
+/* ============ 使用單位工具 ============ */
+function enabledUnits(){ return state.units.filter(u=>u.enabled); }
+function effUnit(inv,it){ return (it.unit||inv.unit||'未指定'); }
+function unitSelectHtml(selected, field, blankLabel){
+  selected=selected||'';
+  const opts=[`<option value=""${selected===''?' selected':''}>${esc(blankLabel)}</option>`]
+    .concat(enabledUnits().map(u=>`<option value="${esc(u.name)}"${u.name===selected?' selected':''}>${esc(u.name)}</option>`));
+  if(selected && !enabledUnits().some(u=>u.name===selected))
+    opts.push(`<option value="${esc(selected)}" selected>${esc(selected)}（已停用）</option>`);
+  return `<select data-field="${field}">${opts.join('')}</select>`;
 }
 
 function renderCard(inv,i){
@@ -372,6 +432,7 @@ function renderCard(inv,i){
       <td><input class="r num" data-field="qty" value="${it.qty}" inputmode="decimal" placeholder="0"></td>
       <td><input class="r num" data-field="unitPrice" value="${it.unitPrice}" inputmode="decimal" placeholder="0"></td>
       <td><input class="r num" data-field="subtotal" value="${it.subtotal}" inputmode="decimal" placeholder="0"></td>
+      <td class="unit-cell">${unitSelectHtml(it.unit,'itemUnit','（同母單位）')}</td>
       <td class="col-del"><button class="row-del" data-act="delRow" title="刪除此列">×</button></td>
     </tr>`).join('');
   card.innerHTML=`
@@ -379,6 +440,7 @@ function renderCard(inv,i){
       <div class="inv-idx">${i+1}</div>
       ${inv.thumb?`<img class="inv-thumb" src="${inv.thumb}" data-act="zoom" alt="發票縮圖">`:''}
       <div class="inv-fields">
+        <div class="fld fld-unit"><label>使用單位</label>${unitSelectHtml(inv.unit,'unit','— 未指定 —')}</div>
         <div class="fld"><label>廠商名稱</label><input data-field="vendor" value="${esc(inv.vendor)}" placeholder="廠商"></div>
         <div class="fld"><label>日期</label><input data-field="date" value="${esc(inv.date)}" placeholder="YYYY-MM-DD"></div>
         <div class="fld"><label>單號 / 發票號碼</label><input data-field="invoiceNo" value="${esc(inv.invoiceNo)}" placeholder="選填"></div>
@@ -387,7 +449,7 @@ function renderCard(inv,i){
     </div>
     <div class="tbl-wrap">
       <table class="items">
-        <thead><tr><th>品名</th><th class="r">數量</th><th class="r">單價</th><th class="r">小計</th><th></th></tr></thead>
+        <thead><tr><th>品名</th><th class="r">數量</th><th class="r">單價</th><th class="r">小計</th><th>單位</th><th></th></tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
     </div>
@@ -420,24 +482,44 @@ function renderSummary(){
   const rows=state.invoices.map((inv,i)=>{ const t=parseNum(inv.total); grand+=t;
     return `<tr><td class="num">${i+1}</td><td class="num">${esc(inv.date||'—')}</td>
       <td><span class="vendor-tag" style="background:${vendorColor(inv.vendor)}"></span>${esc(inv.vendor||'未填')}</td>
+      <td>${esc(inv.unit||'未指定')}</td>
       <td class="num">${esc(inv.invoiceNo||'—')}</td><td class="r num">${inv.items.filter(it=>it.name||it.subtotal).length}</td>
       <td class="r num">${fmt(t)}</td></tr>`;
   }).join('');
   box.innerHTML=`<table class="summary">
-    <thead><tr><th>#</th><th>日期</th><th>廠商</th><th>單號</th><th class="r">項目</th><th class="r">金額</th></tr></thead>
+    <thead><tr><th>#</th><th>日期</th><th>廠商</th><th>使用單位</th><th>單號</th><th class="r">項目</th><th class="r">金額</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot><tr><td colspan="5">總計 ${state.invoices.length} 張</td><td class="r num">${fmt(grand)}</td></tr></tfoot>
+    <tfoot><tr><td colspan="6">總計 ${state.invoices.length} 張</td><td class="r num">${fmt(grand)}</td></tr></tfoot>
   </table>`;
 
+  // 廠商樞紐（依發票總額）
   const map={};
   state.invoices.forEach(inv=>{ const k=inv.vendor||'未填'; if(!map[k])map[k]={count:0,amt:0}; map[k].count++; map[k].amt+=parseNum(inv.total); });
   const pivRows=Object.entries(map).sort((a,b)=>b[1].amt-a[1].amt).map(([k,v])=>`
     <tr><td><span class="vendor-tag" style="background:${vendorColor(k==='未填'?'':k)}"></span>${esc(k)}</td>
     <td class="r num">${v.count}</td><td class="r num">${fmt(v.amt)}</td>
     <td class="r num">${grand?Math.round(v.amt/grand*100):0}%</td></tr>`).join('');
+
+  // 單位樞紐（依品項有效單位的小計加總）
+  const umap={}; let uGrand=0;
+  state.invoices.forEach(inv=>{
+    const seen={};
+    inv.items.forEach(it=>{ if(!(it.name||it.subtotal)) return; const k=effUnit(inv,it); const sub=parseNum(it.subtotal);
+      if(!umap[k]) umap[k]={amt:0,items:0,invs:0}; umap[k].amt+=sub; umap[k].items++; uGrand+=sub;
+      if(!seen[k]){ seen[k]=1; umap[k].invs++; } });
+  });
+  const uRows=Object.entries(umap).sort((a,b)=>b[1].amt-a[1].amt).map(([k,v])=>`
+    <tr><td>${esc(k)}</td><td class="r num">${v.invs}</td><td class="r num">${v.items}</td>
+    <td class="r num">${fmt(v.amt)}</td><td class="r num">${uGrand?Math.round(v.amt/uGrand*100):0}%</td></tr>`).join('');
+
   piv.innerHTML=`<table class="summary">
     <thead><tr><th>廠商</th><th class="r">張數</th><th class="r">金額</th><th class="r">佔比</th></tr></thead>
-    <tbody>${pivRows}</tbody></table>`;
+    <tbody>${pivRows}</tbody></table>
+    <div style="font-size:11px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase;margin:18px 0 8px">使用單位樞紐分析</div>
+    <table class="summary">
+      <thead><tr><th>使用單位</th><th class="r">張數</th><th class="r">項目</th><th class="r">金額</th><th class="r">佔比</th></tr></thead>
+      <tbody>${uRows||'<tr><td colspan="5" style="color:var(--muted)">尚無品項</td></tr>'}</tbody>
+    </table>`;
   $('#grandTotal').textContent=fmt(grand);
 }
 
@@ -459,6 +541,14 @@ $('#invoiceList').addEventListener('input', e=>{
     else if(fld==='invoiceNo'){ inv.invoiceNo=e.target.value; renderSummary(); }
     else if(fld==='total'){ inv.total=e.target.value; inv.manualTotal=true; renderSummary(); }
   }
+});
+/* 使用單位下拉是 <select>，觸發 change 事件 */
+$('#invoiceList').addEventListener('change', e=>{
+  const fld=e.target.dataset.field; if(fld!=='unit'&&fld!=='itemUnit') return;
+  const card=e.target.closest('.invoice'); const inv=getInv(card.dataset.inv); if(!inv) return;
+  if(fld==='unit'){ inv.unit=e.target.value; }
+  else { const tr=e.target.closest('tr'); if(!tr) return; const r=+tr.dataset.row; if(inv.items[r]) inv.items[r].unit=e.target.value; }
+  renderSummary();
 });
 function recalcRow(inv,r,card){
   const it=inv.items[r]; if(it.qty!==''&&it.unitPrice!==''){ it.subtotal=round2(parseNum(it.qty)*parseNum(it.unitPrice)); }
@@ -544,7 +634,7 @@ function showPendingError(pend,name,err){
 /* ============ 工作檔 存 / 讀 ============ */
 function saveSession(){
   if(!state.invoices.length){ toast('沒有資料可儲存'); return; }
-  const payload={ savedAt:nowStamp(), label:$('#sessionLabel').value||'', invoices:state.invoices, version:1 };
+  const payload={ savedAt:nowStamp(), label:$('#sessionLabel').value||'', invoices:state.invoices, units:state.units, version:1 };
   const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
   const label=$('#sessionLabel').value? '_'+$('#sessionLabel').value.replace(/[\\/:*?"<>|]/g,'') : '';
   download(blob, `發票結算工作檔_${fileStamp()}${label}.json`);
@@ -557,23 +647,24 @@ async function loadJsonFile(file){
     if(!Array.isArray(arr)) throw new Error('檔案格式不符');
     if(state.invoices.length && !confirm('載入工作檔會取代目前畫面上的資料，要繼續嗎？')) return;
     state.invoices = arr.map(v=>{ state.counter++; return {
-      id:state.counter, vendor:v.vendor||'', date:v.date||'', invoiceNo:v.invoiceNo||'',
+      id:state.counter, vendor:v.vendor||'', date:v.date||'', unit:v.unit||'', invoiceNo:v.invoiceNo||'',
       thumb:v.thumb||'', total:v.total??0, manualTotal:v.manualTotal??true, engine:v.engine||'gemini',
-      items:(v.items&&v.items.length?v.items:[blankItem()]).map(it=>({name:it.name||'',qty:it.qty??'',unitPrice:it.unitPrice??'',subtotal:it.subtotal??'',manualSub:it.manualSub??false}))
+      items:(v.items&&v.items.length?v.items:[blankItem()]).map(it=>({name:it.name||'',qty:it.qty??'',unitPrice:it.unitPrice??'',subtotal:it.subtotal??'',manualSub:it.manualSub??false,unit:it.unit||''}))
     };});
+    if(Array.isArray(obj.units)) state.units=obj.units;
     if(obj.label) $('#sessionLabel').value=obj.label;
     if(obj.savedAt){ $('#sessionDate').textContent=obj.savedAt; }
-    render(); toast('已載入工作檔（'+(obj.savedAt||'')+'）');
+    render(); renderUnitPanel(); toast('已載入工作檔（'+(obj.savedAt||'')+'）');
   }catch(err){ toast('載入失敗：'+err.message); }
 }
 
 /* ============ 匯出 xlsx ============ */
 function itemSheet(inv){
-  const aoa=[['廠商',inv.vendor||''],['日期',inv.date||''],['單號',inv.invoiceNo||''],[],
-    ['品名','數量','單價','小計']];
-  inv.items.filter(it=>it.name||it.subtotal).forEach(it=>aoa.push([it.name||'',num(it.qty),num(it.unitPrice),num(it.subtotal)]));
+  const aoa=[['廠商',inv.vendor||''],['日期',inv.date||''],['單號',inv.invoiceNo||''],['使用單位',inv.unit||'未指定'],[],
+    ['品名','數量','單價','小計','使用單位']];
+  inv.items.filter(it=>it.name||it.subtotal).forEach(it=>aoa.push([it.name||'',num(it.qty),num(it.unitPrice),num(it.subtotal),effUnit(inv,it)]));
   aoa.push([]); aoa.push(['','','總額',num(inv.total)]);
-  const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:24},{wch:8},{wch:10},{wch:12}]; return ws;
+  const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:24},{wch:8},{wch:10},{wch:12},{wch:14}]; return ws;
 }
 function num(v){ const n=parseNum(v); return v===''||v==null?'':n; }
 function exportInvoice(inv){
@@ -586,19 +677,27 @@ function exportAll(){
   const wb=XLSX.utils.book_new();
   // 彙總
   let grand=0;
-  const sum=[['#','日期','廠商','單號','項目數','金額']];
-  state.invoices.forEach((inv,i)=>{ const t=parseNum(inv.total); grand+=t; sum.push([i+1,inv.date||'',inv.vendor||'',inv.invoiceNo||'',inv.items.filter(it=>it.name||it.subtotal).length,t]); });
-  sum.push([]); sum.push(['','','','','總計',grand]);
-  const ws1=XLSX.utils.aoa_to_sheet(sum); ws1['!cols']=[{wch:5},{wch:14},{wch:18},{wch:16},{wch:8},{wch:12}];
+  const sum=[['#','日期','廠商','使用單位','單號','項目數','金額']];
+  state.invoices.forEach((inv,i)=>{ const t=parseNum(inv.total); grand+=t; sum.push([i+1,inv.date||'',inv.vendor||'',inv.unit||'未指定',inv.invoiceNo||'',inv.items.filter(it=>it.name||it.subtotal).length,t]); });
+  sum.push([]); sum.push(['','','','','','總計',grand]);
+  const ws1=XLSX.utils.aoa_to_sheet(sum); ws1['!cols']=[{wch:5},{wch:14},{wch:18},{wch:14},{wch:16},{wch:8},{wch:12}];
   XLSX.utils.book_append_sheet(wb, ws1, '彙總');
-  // 樞紐
+  // 樞紐-廠商
   const map={}; state.invoices.forEach(inv=>{const k=inv.vendor||'未填'; if(!map[k])map[k]={c:0,a:0}; map[k].c++; map[k].a+=parseNum(inv.total);});
   const piv=[['廠商','張數','金額','佔比']];
   Object.entries(map).sort((a,b)=>b[1].a-a[1].a).forEach(([k,v])=>piv.push([k,v.c,v.a,(grand?(v.a/grand):0)]));
   const ws2=XLSX.utils.aoa_to_sheet(piv); ws2['!cols']=[{wch:18},{wch:8},{wch:12},{wch:8}];
-  // 佔比格式化為百分比
   for(let r=1;r<piv.length;r++){ const c=XLSX.utils.encode_cell({r,c:3}); if(ws2[c]){ws2[c].z='0%';} }
   XLSX.utils.book_append_sheet(wb, ws2, '樞紐-廠商');
+  // 樞紐-單位（依品項有效單位的小計加總）
+  const umap={}; let uGrand=0;
+  state.invoices.forEach(inv=>{ const seen={}; inv.items.forEach(it=>{ if(!(it.name||it.subtotal)) return; const k=effUnit(inv,it); const sub=parseNum(it.subtotal);
+    if(!umap[k])umap[k]={invs:0,items:0,a:0}; umap[k].a+=sub; umap[k].items++; uGrand+=sub; if(!seen[k]){seen[k]=1;umap[k].invs++;} }); });
+  const upiv=[['使用單位','張數','項目數','金額','佔比']];
+  Object.entries(umap).sort((a,b)=>b[1].a-a[1].a).forEach(([k,v])=>upiv.push([k,v.invs,v.items,v.a,(uGrand?(v.a/uGrand):0)]));
+  const ws3=XLSX.utils.aoa_to_sheet(upiv); ws3['!cols']=[{wch:16},{wch:8},{wch:8},{wch:12},{wch:8}];
+  for(let r=1;r<upiv.length;r++){ const c=XLSX.utils.encode_cell({r,c:4}); if(ws3[c]){ws3[c].z='0%';} }
+  XLSX.utils.book_append_sheet(wb, ws3, '樞紐-單位');
   // 每張一個工作表
   const used={};
   state.invoices.forEach((inv,i)=>{ let nm=sheetName(`${i+1}_${inv.vendor||'發票'}`); while(used[nm]){nm=sheetName(nm+'_'+i);} used[nm]=1; XLSX.utils.book_append_sheet(wb, itemSheet(inv), nm); });
@@ -630,6 +729,65 @@ $('#btnExportAll').onclick=exportAll;
 $('#btnSave').onclick=saveSession;
 $('#btnClear').onclick=()=>{ if(state.invoices.length&&confirm('清空全部資料？建議先儲存工作檔。')){ state.invoices=[]; render(); } };
 
+/* ============ 使用單位：後端讀寫 + 右下角懸浮面板 ============ */
+async function loadUnits(){
+  try{
+    const r=await fetch('/api/units',{headers:{'x-app-password':state.password}});
+    const j=await r.json();
+    if(Array.isArray(j.units)){ state.units=j.units; render(); renderUnitPanel(); }
+  }catch(_){}
+}
+let _saveUnitsT=null;
+function saveUnits(){
+  clearTimeout(_saveUnitsT);
+  _saveUnitsT=setTimeout(async ()=>{
+    try{
+      const r=await fetch('/api/units',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({password:state.password, units:state.units})});
+      const j=await r.json(); toast(j.ok?'單位清單已儲存':(j.error||'儲存失敗'));
+    }catch(_){ toast('單位清單儲存失敗'); }
+  },600);
+}
+function newUnitId(){ return 'u'+Math.random().toString(36).slice(2,8); }
+function renderUnitPanel(){
+  const list=$('#unitList'); if(!list) return;
+  if(!state.units.length){ list.innerHTML='<div class="unit-empty">尚無單位，請在下方新增。</div>'; return; }
+  list.innerHTML=state.units.map(u=>`
+    <div class="unit-row" data-id="${esc(u.id)}">
+      <label class="unit-chk"><input type="checkbox" data-act="toggle" ${u.enabled?'checked':''}><span>顯示</span></label>
+      <input class="unit-name" data-act="rename" value="${esc(u.name)}" placeholder="單位名稱">
+      <button class="unit-del" data-act="del" title="刪除">×</button>
+    </div>`).join('');
+}
+function bindUnitPanel(){
+  $('#unitFab').onclick=()=>{ const p=$('#unitPanel'); p.classList.toggle('open'); };
+  $('#unitClose').onclick=()=>$('#unitPanel').classList.remove('open');
+  $('#unitList').addEventListener('change', e=>{
+    const row=e.target.closest('.unit-row'); if(!row) return;
+    const u=state.units.find(x=>x.id===row.dataset.id); if(!u) return;
+    if(e.target.dataset.act==='toggle'){ u.enabled=e.target.checked; saveUnits(); render(); }
+  });
+  $('#unitList').addEventListener('input', e=>{
+    if(e.target.dataset.act!=='rename') return;
+    const row=e.target.closest('.unit-row'); const u=state.units.find(x=>x.id===row.dataset.id); if(!u) return;
+    u.name=e.target.value; saveUnits(); render();
+  });
+  $('#unitList').addEventListener('click', e=>{
+    if(e.target.dataset.act!=='del') return;
+    const row=e.target.closest('.unit-row'); const id=row.dataset.id;
+    state.units=state.units.filter(x=>x.id!==id); saveUnits(); render(); renderUnitPanel();
+  });
+  function addUnit(){
+    const name=$('#unitNew').value.trim(); if(!name){ return; }
+    if(state.units.some(u=>u.name===name)){ toast('已有相同單位'); return; }
+    state.units.push({ id:newUnitId(), name, enabled:true });
+    $('#unitNew').value=''; saveUnits(); render(); renderUnitPanel();
+  }
+  $('#unitAdd').onclick=addUnit;
+  $('#unitNew').addEventListener('keydown',e=>{ if(e.key==='Enter') addUnit(); });
+}
+bindUnitPanel();
+
 /* ============ 密碼登入 ============ */
 const GATE = { el:$('#gate'), show(){ this.el.style.display='grid'; setTimeout(()=>$('#gatePw').focus(),50); }, hide(){ this.el.style.display='none'; } };
 async function verifyPassword(pw){
@@ -643,7 +801,7 @@ async function submitGate(){
   $('#gateErr').style.color='var(--muted)'; $('#gateErr').textContent='驗證中…';
   if(await verifyPassword(pw)){
     state.password=pw; try{ localStorage.setItem('inv_pw',pw); }catch(_){}
-    $('#gateErr').textContent=''; GATE.hide();
+    $('#gateErr').textContent=''; GATE.hide(); loadUnits();
   }else{
     $('#gateErr').style.color='var(--err)'; $('#gateErr').textContent='密碼錯誤，請再試一次';
     $('#gatePw').select();
@@ -653,11 +811,11 @@ $('#gateBtn').onclick=submitGate;
 $('#gatePw').addEventListener('keydown',e=>{ if(e.key==='Enter') submitGate(); });
 (async function initGate(){
   let pw=''; try{ pw=localStorage.getItem('inv_pw')||''; }catch(_){}
-  if(pw && await verifyPassword(pw)){ state.password=pw; GATE.hide(); }
+  if(pw && await verifyPassword(pw)){ state.password=pw; GATE.hide(); loadUnits(); }
   else { GATE.show(); }
 })();
 
-render();
+render(); renderUnitPanel();
 </script>
 </body>
 </html>

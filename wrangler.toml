@@ -1,3 +1,8 @@
 name = "ihg-invoice-ledger"
 compatibility_date = "2025-06-01"
 pages_build_output_dir = "."
+
+# 使用單位清單儲存（前端 /api/units 透過 env.UNITS_KV 讀寫）
+[[kv_namespaces]]
+binding = "UNITS_KV"
+id = "ff83f129fa00482f9b9ed30d768367f1"
